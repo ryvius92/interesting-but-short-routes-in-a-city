@@ -66,6 +66,8 @@ The red route is the shortest one, the blue one is the 'most interesting' route,
 
 Routes Statistics :
 
+![alt tag](https://github.com/ryvius92/short-and-interesting-routes-in-a-city/blob/master/valutazione1.jpg)
+
 
 
 
