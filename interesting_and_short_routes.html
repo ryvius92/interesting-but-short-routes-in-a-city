@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Pianificatore di percorsi consapevole dei punti di interesse</title>
+	
+	<meta charset="utf-8" />
+
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+	<link rel="stylesheet" href="http://cdn.leafletjs.com/leaflet-0.7.3/leaflet.css" />
+	<link rel="stylesheet" href="leaflet-routing-machine.css" />
+	<link rel="stylesheet" href="Control.Geocoder.css" />
+	<link rel="stylesheet" href="leaflet.routing.mapzen.css">
+	
+	<script src="http://cdn.leafletjs.com/leaflet-0.7.3/leaflet.js"></script>
+	<script src="leaflet-routing-machine.js"></script>
+	<script src="Control.Geocoder.js"></script>
+	<script src="lrm-mapzen.js"></script>
+	<script src="turf.min.js"></script>
+	<script src="flickrapi.dev.js"></script>
+	<script src="flickrapi.js"></script>
+	<script src="sentiment-multilang.js"></script>
+	
+	<style>
+		body {
+			padding: 0;
+			margin: 0;
+		}
+		html, body, #map {
+			height: 100%;
+		}
+		.map {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+        }
+		
+	</style>
+	
+</head>
+<body>
+	<div id="mapid" style="width: 1000px; height: 600px"></div>
+	
+	<script>
+		
+		/***********************
+		CITIES AND MAP LAYER
+		***********************/
+		
+		//city limits
+		var milan = {
+			coordinates: [9.150, 45.450, 9.214, 45.492],
+			distance: [4.9938, 4.6715],
+			centre: [45.465, 9.186],
+			pages_photo: 1700,
+			tot_photos: 425000,
+			selected: true
+		};
+		
+		var florence = {
+			coordinates: [11.233, 43.759, 11.278, 43.788],
+			distance: [3.6150, 3.2256],
+			centre: [43.773, 11.255],
+			pages_photo: 1600,
+			tot_photos: 400000,
+			selected: false
+		};
+		
+		var cities = [milan,florence];
+		
+		var selected_city = {
+			coordinates: [0, 0, 0, 0],
+			distance: [0, 0],
+			centre: [0, 0],
+			pages_photo: 0,
+			tot_photos: 0,
+			name: ""
+		};
+
+		
+		selectCity();
+		
+		//create map
+		var mymap = L.map('mapid').setView(selected_city.centre, 14); // set view on Milan
+		//add OpenStreetMap layer to mymap
+		L.tileLayer('http://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+			maxZoom: 18,
+		}).addTo(mymap);
+	
+		
+		
+		
+		/**************************
+		MAP AND ROUTING VARIABLES
+		***************************/
+		
+		// polygons = grid of rectangles which have been used to split the map layer
+		var polygons_base = 0.400; //kms
+		var polygons_height = 0.250; //kms
+		
+		//city limits
+		var southWest_lng = 0;
+		var southWest_lat = 0;
+		var northEast_lng = 0;
+		var northEast_lat = 0;
+		
+		// numberOfParts : [base polygons number, height polygons number]
+		// tot polygons = (numberOfParts[0] x numberOfParts[1])
+		var numberOfParts = [];
+		
+		// polygons properties 
+		var pol_values = {};
+		
+		// polygons crossed by fastest route
+		var polFastestRoute = []; 
+		
+		// polygons neighbors of polFastestRoute
+		var neighborsRoute = []; 
+		
+		// neighbors of neighbors of polFastestRoute
+		var nsOfNsRoute = [];
+		
+		// polygons and neighbors of start and finish points(fastest route)
+		var startPolygon = {};
+		var finishPolygon = {};
+		var startPolygonNeighbors = [];
+		var finishPoygonNeighbors = [];
+		
+		// polygons buffer (polFastestRoute + neighborsRoute + nsOfNsRoute)
+		var listPolygons = [];
+		
+		// list of routes
+		var routes = [];
+		
+		// centers of listPolygons ordered by highest score
+		var centerBestPolygons = [];
+	
+		// buffer of centers (selected from centerBestPolygons)
+		var centerNewRoutes = [];
+		
+		
+		// SCORES/TIMES/DISTANCES OF ROUTES
+		var timeShortestPath = 0;
+		var timeMax = 0; // max travel time for new routes
+		var scoreFastestRoute = 0;
+		var distStartFinish = 0; // distance from start point to finish point
+		var distFromStart = []; // distance from start to centerNewRoutes
+		var distFromFinish = []; // distance from finish to centerNewRoutes
+		var scoreRoutes = []; // total score of new interesting routes
+		var maxDist = 0; // max distance from start/finish to new possible waypoints]
+		var maxDist2 = 0;
+		var maxDistBetweenWaypoints = 0; // max distance between 2 waypoints in a new route
+		var distFromBestWaypoint = []; 
+		// distance between centre of highest score polygon and the centres of other polygons
+		
+		var polygonsNewRoute = [];
+		
+		// 1 or 2 selected polygons 
+		var interestingPolygons = [];
+		
+		// true if a second waypoint exist
+		var secondWaypoint = false;
+		
+		// center of second waypoint
+		var secondWaypointCenter = [];
+		
+		
+	
+		
+		
+		/**************************
+		MAP CREATION
+		**************************/
+
+		calcPolygons(polygons_base, polygons_height, selected_city.distance); // determines polygons dimension
+		calcCityLimits(selected_city.coordinates); // determines city limits 
+		createPolygons(mymap); // creates grid of polygons(rectangles)
+		assignNeighbors(pol_values);
+
+		// Initialize fastest route with Valhalla
+		var fastestRoute = L.Routing.control({ 
+				waypoints: [],
+				geocoder: L.Control.Geocoder.nominatim(),
+				router: L.Routing.mapzen('mapzen_key', {costing:'pedestrian'}),
+				formatter: new L.Routing.mapzenFormatter(),
+				containerClassName: 'fastestRouteContainer'
+		});
+		fastestRoute.addTo(mymap);
+		
+		// initialize new possible routes
+		for(var i=0; i < 1; i++){  
+			routes[i] = initializeRoute();
+		}
+	
+	
+		
+		
+		/************************
+		ROUTES SELECTION
+		************************/
+		
+		// program reaction when user select start and finish ('routeselected')
+		fastestRoute.on('routeselected', function(e) {
+			var route = e.route;  
+			timeShortestPath = route.summary.totalTime; 
+			timeMax = timeShortestPath + (40 / 100 * timeShortestPath ); // timeMax = timeShortestPath + 40%
+			
+			findPolygonsFastestRoute(route); // find all polygons in neighborsRoute and polFastestRoute
+			startPolygon = polFastestRoute[0];
+			finishPolygon = polFastestRoute[(polFastestRoute.length)-1];
+			removeDuplicates(polFastestRoute);
+			removeDuplicates(neighborsRoute);
+			
+			// remove polFastestRoute from neighborsRoute
+			neighborsRoute = neighborsRoute.filter(function(polyg1) {      
+				return !polFastestRoute.some(function(polyg2){
+				return polyg1.id === polyg2.id;
+				});
+			});	
+			polFastestRoute = polFastestRoute.filter( function( el ){ return (typeof el === "object"); } );
+			
+			
+			scoreFastestRoute = findScore(polFastestRoute); // find score of fastest route
+			findNsOfNs(neighborsRoute); //find neighbors of neighbors
+			
+			// create polygons list
+			listPolygons = (neighborsRoute.concat(polFastestRoute)).concat(nsOfNsRoute);
+			removeDuplicates(listPolygons);
+			// sort the list in a desc order about the score
+			listPolygons.sort(function(a,b){return b.score - a.score;}); 
+			//console.log(listPolygons);
+			
+		    findCenterBestPolygons(); // find centerBestPolygons and centerNewRoutes(centers list)
+			
+			
+			// remove duplicates from centerNewRoutes
+			for(var i=0; i < centerNewRoutes.length-1; i++ ) { 	
+				if ((centerNewRoutes[i].geometry.coordinates[0] == centerNewRoutes[i+1].geometry.coordinates[0]) && 
+					(centerNewRoutes[i].geometry.coordinates[1] == centerNewRoutes[i+1].geometry.coordinates[1]))
+						delete centerNewRoutes[i];
+				
+			}
+			centerNewRoutes = centerNewRoutes.filter( function( el ){ return (typeof el !== "undefined"); } );
+			
+		
+	
+			
+			// LIST OF CONTROLS TO SELECT THE MOST INTERESTING AREAS
+		
+			// determine distFromStart, distFromFinish
+			for(i = 0, j = centerNewRoutes.length; i < j; i++){
+				distFromStart[i] = calcDistance(route.waypoints[0].latLng.lat, route.waypoints[0].latLng.lng, 
+								                centerNewRoutes[i].geometry.coordinates[1], centerNewRoutes[i].geometry.coordinates[0]);
+				distFromFinish[i] = calcDistance(route.waypoints[1].latLng.lat, route.waypoints[1].latLng.lng, 
+								                centerNewRoutes[i].geometry.coordinates[1], centerNewRoutes[i].geometry.coordinates[0]);
+			}
+			
+			// determine distStartFinish of the fastest route
+			distStartFinish = calcDistance(route.waypoints[0].latLng.lat, route.waypoints[0].latLng.lng, 
+										   route.waypoints[1].latLng.lat, route.waypoints[1].latLng.lng);
+										 
+			maxDist2 = distStartFinish - (20 / 100 * distStartFinish );
+			maxDist = distStartFinish + (15 / 100 * distStartFinish ); // maxDist = distStartFinish + 15%
+			// maxDistBetweenWaypoints  = distStartFinish - 30%
+			maxDistBetweenWaypoints = distStartFinish - (30 / 100 * distStartFinish );
+			
+			// delete from centerNewRoutes points too far from the route
+			for(i = 0, j = centerNewRoutes.length; i < j; i++){
+				if((distFromStart[i] > 0.33*(distStartFinish)) || (distFromFinish[i] > 0.33*(distStartFinish))) {
+					if((distFromStart[i] > maxDist) || (distFromFinish[i] > maxDist)) {
+						delete centerNewRoutes[i];
+						delete distFromStart[i];
+						delete distFromFinish[i];
+						centerNewRoutes = centerNewRoutes.filter( function( el ){ return (typeof el !== "undefined"); } );
+						distFromStart = distFromStart.filter( function( el ){ return (typeof el !== "undefined"); } );
+						distFromFinish = distFromFinish.filter( function( el ){ return (typeof el !== "undefined"); } );
+					}
+				}
+				else{
+					if((distFromStart[i] > maxDist2) || (distFromFinish[i] > maxDist2)) {
+						delete centerNewRoutes[i];
+						delete distFromStart[i];
+						delete distFromFinish[i];
+						centerNewRoutes = centerNewRoutes.filter( function( el ){ return (typeof el !== "undefined"); } );
+						distFromStart = distFromStart.filter( function( el ){ return (typeof el !== "undefined"); } );
+						distFromFinish = distFromFinish.filter( function( el ){ return (typeof el !== "undefined"); } );
+					}
+				}
+			}
+			
+			// select waypoints:
+			// limit of 2 waypoints (2 interesting locations), where the first is the one with the best score,
+			// while the second is selected upon the criteria and controls already in use
+			selectWaypoints(route);
+			
+			fastestRoute.hide(); //Hides the itinerary control of fastestRoute
+			$('.leaflet-control-container .leaflet-routing-container-hide').css({
+				'display': 'none'});
+			
+			
+			
+		});
+		
+		// program reaction when the new "interesting" route is found
+		routes[0].on('routeselected', function(e) {
+			var route = e.route;
+			polygonsNewRoute = findPolygonsInRoute(route); // search polygons crossed by the new route...
+			scoreRoutes[0] = findScore(polygonsNewRoute);  // ... and find its score
+			
+			$('.leaflet-control-container .leaflet-routing-container-hide').css({
+				'width': '32px',
+				'height' : '32px'});
+			
+		     
+			
+			// identify interesting polygons already choosen from centers list
+			interestingPolygons.push(listPolygons[0]); //first polygon
+			if (secondWaypoint == true) {  //does the 2nd polygon exist?
+				var p = {
+					"type": "Feature",
+					"geometry": {
+						"type": "Point",
+						"coordinates": [secondWaypointCenter[0].geometry.coordinates[0],
+										secondWaypointCenter[0].geometry.coordinates[1]]
+					}
+				};
+				for (var i = 0, j = polygonsNewRoute.length; i < j; i++) {
+					var isInside = turf.inside(p, polygonsNewRoute[i].geoJson);
+					if(isInside == true) { 
+						interestingPolygons.push(polygonsNewRoute[i]); // add the 2nd polygon
+					}
+				}
+			}
+			
+			
+		});
+
+		
+		
+
+		/************************
+		LIST OF FUNCTIONS 
+		************************/
+		
+	
+		function selectCity() {
+			for(var i=0, j=cities.length; i<j; i++) {
+				if(cities[i].selected == true) {
+					selected_city.coordinates = cities[i].coordinates;
+					selected_city.distance = cities[i].distance;
+					selected_city.centre = cities[i].centre;
+					selected_city.pages_photo = cities[i].pages_photo;
+					selected_city.tot_photos = cities[i].tot_photos;
+				}
+			}
+		}
+	
+		// find dimension and tot number of polygons 
+		function calcPolygons(base, height, city) {
+			var number_base = Math.round(city[0]/base);
+			var number_height = Math.round(city[1]/height);
+			numberOfParts = [number_base, number_height];
+		}
+		
+		// find city bounds
+		function calcCityLimits(city) {
+			southWest_lng = city[0];
+			southWest_lat = city[1];
+			northEast_lng = city[2];
+			northEast_lat = city[3];
+		}
+		
+		// create grid of polygons
+		function createPolygons(map) {   
+			var n = 0;
+			var Width = (northEast_lng - southWest_lng) / numberOfParts[0];
+			var Height = (northEast_lat - southWest_lat) / numberOfParts[1];
+			for (var x = 0; x < numberOfParts[0]; x++) {
+				for (var y = 0; y < numberOfParts[1]; y++) {
+						var nLat = southWest_lat + (Height * (y + 1));
+						var sLat = southWest_lat + (Height * y);
+						var eLng = southWest_lng + (Width * (x + 1));
+						var wLng = southWest_lng + (Width * x);
+					
+						var polyg = L.polygon([[sLat, wLng], [nLat, wLng], [nLat, eLng], [sLat, eLng]], 
+										{color: "#8A2BE2", weight: 1, opacity: 0.0003, fill: false}).addTo(map);
+										//#8A2BE2 violet
+										//#ff7800 orange
+						
+						pol_values[[x,y]] = {
+							id: n,
+							neighbors: {},
+							//score: Math.floor((Math.random() * 1000) + 1), //random results for polygons score
+							score: 0,
+							geoJson: polyg.toGeoJSON(),
+							photos: [],
+							numOfPhotos: 0,
+							viewsScore: 0,
+							totViews: 0,
+							};
+							
+						n++;
+				}
+			}
+		}
+		
+		// assign neighbors to all polygons (using properties of a bidimensional matrix)
+		function assignNeighbors(pol_values) {
+			for (var x = 0; x < numberOfParts[0]; x++) {
+				for (var y = 0; y < numberOfParts[1]; y++) {
+					if(x == 0 && y == 0) {
+						pol_values[[x,y]].neighbors = [pol_values[[x,y+1]], pol_values[[x+1,y+1]], pol_values[[x+1,y]]];
+					}
+					else if(x == (numberOfParts[0]-1) && y == 0) {
+						pol_values[[x,y]].neighbors =  [pol_values[[x-1,y]], pol_values[[x-1,y+1]], pol_values[[x,y+1]]];
+					}
+					else if(x == (numberOfParts[0]-1) && y == (numberOfParts[1]-1)) {
+						pol_values[[x,y]].neighbors =  [pol_values[[x-1,y]], pol_values[[x-1,y-1]], pol_values[[x,y-1]]];
+					}
+					else if(x == 0 && y == (numberOfParts[1]-1)) {
+						pol_values[[x,y]].neighbors =  [pol_values[[x+1,y]], pol_values[[x+1,y-1]], pol_values[[x,y-1]]];
+					}
+					else if(x == 0) {
+						pol_values[[x,y]].neighbors =  [pol_values[[x+1,y]], pol_values[[x+1,y-1]], pol_values[[x,y+1]],
+							  pol_values[[x+1,y+1]], pol_values[[x,y-1]]];
+					}
+					else if(y == 0) {
+						pol_values[[x,y]].neighbors =  [pol_values[[x,y+1]], pol_values[[x-1,y]], pol_values[[x-1,y+1]],
+							  pol_values[[x+1,y+1]], pol_values[[x+1,y]]];
+					}
+					else if(x == (numberOfParts[0]-1)) {
+						pol_values[[x,y]].neighbors =  [pol_values[[x,y+1]], pol_values[[x-1,y+1]], pol_values[[x-1,y]],
+							  pol_values[[x-1,y-1]], pol_values[[x,y-1]]];
+					}
+					else if(y == (numberOfParts[1]-1)) {
+						pol_values[[x,y]].neighbors =  [pol_values[[x-1,y]], pol_values[[x-1,y-1]], pol_values[[x,y-1]],
+							  pol_values[[x+1,y-1]], pol_values[[x+1,y]]];
+					}
+					else {
+						pol_values[[x,y]].neighbors =  [pol_values[[x-1,y]], pol_values[[x-1,y-1]], pol_values[[x,y-1]],
+							  pol_values[[x+1,y]], pol_values[[x+1,y-1]],
+							  pol_values[[x+1,y+1]], pol_values[[x,y+1]], pol_values[[x-1,y+1]]];
+					}
+					
+				}
+			}
+		}
+		
+		
+		// find the polygon where the starting point of the fastest route is located
+		function insideFirst(point_lng, point_lat) {
+			var p = {
+				"type": "Feature",
+				"geometry": {
+					"type": "Point",
+					"coordinates": [point_lng, point_lat]
+				}
+			};
+			for (var x = 0; x < numberOfParts[0]; x++) {
+				for (var y = 0; y < numberOfParts[1]; y++) {
+					var isInside = turf.inside(p, pol_values[[x,y]].geoJson);
+					if(isInside == true) { 
+						return pol_values[[x,y]]
+					}
+				}
+			}
+		}
+		
+		
+		//find the polygons of all the other points of the fastest route
+		var precPolygon = {};
+		function inside(point_lng, point_lat, precPolygon) {
+			var p = {
+				"type": "Feature",
+				"geometry": {
+					"type": "Point",
+					"coordinates": [point_lng, point_lat]
+				}
+			};
+			var isInside = turf.inside(p, precPolygon.geoJson); // is p inside the same polygon of the previous point?
+					if(isInside == true) { 
+						return precPolygon
+					}
+			
+			for (var k = 0, j = precPolygon.neighbors.length; k < j; k++){
+				var isInside = turf.inside(p, precPolygon.neighbors[k].geoJson);
+					if(isInside == true) { 
+						return precPolygon.neighbors[k]
+					}
+			}
+		}
+		
+		// remove duplicates from an array of polygons
+		function removeDuplicates(polygons) {
+			//polygons.sort(function(a,b){return b.score - a.score;}); //order polygons from the one with highest score to..
+			polygons.sort(function(a,b){return a.id - b.id;}); //sort polygons from the one with the lowest id to..
+			
+			polygons = polygons.filter( function( el ){ return (typeof el !== "undefined"); } );
+			for(var i=0; i < polygons.length-1; i++ ) { 	//remove duplicates
+				if (polygons[i].id == polygons[i+1].id) {
+						delete polygons[i];
+				}
+			}
+			polygons = polygons.filter( function( el ){ return (typeof el !== "undefined"); } );
+			
+		}
+		
+		// find the score of an array of polygons
+		function findScore(polygons) {
+			var scoreRoute = 0;
+			for (var i = 0, j = polygons.length; i < j; i++){
+				scoreRoute = scoreRoute + polygons[i].score;
+			}
+			return scoreRoute
+		}
+		
+		// interesting routes initialization
+		function initializeRoute() {
+			var route = L.Routing.control({ 
+				waypoints: [],
+				routeWhileDragging: false,
+				geocoder: L.Control.Geocoder.nominatim(),
+				router: L.Routing.mapzen('mapzen_key', {costing:'pedestrian'}),
+				formatter: new L.Routing.mapzenFormatter(),
+				itineraryClassName: 'itinerary',
+				collapsible: 'true', // close and open the itinerary formatter at will
+				itineraryFormatter: 'tbody',
+				lineOptions: {
+					styles: [{color: 'blue', opacity: 0.7, weight: 2}]
+				}
+			});
+			
+			return route
+		}
+		
+		// return true if the given polygon is inside an array polygons (neighbors)
+		function isInNeighbors(polygon, polygons){		
+			for(var i = 0, j = polygons.length; i < j; i++){
+				if(polygon.id == polygons[i].id)
+					return true
+			}
+			return false
+		}
+
+		// find all polygons cross by a route (not the fastest one)
+		function findPolygonsInRoute(route) {
+			var polygons = [];
+			var points = [];
+			//insert first point
+			points[0]= {
+					"type": "Feature",
+					"geometry": {
+						"type": "Point",
+						"coordinates": [route.coordinates[0][1], route.coordinates[0][0]]
+					}
+				};
+			for(var k = 0, l = listPolygons.length; k < l; k++){
+					var isInside = turf.inside(points[0], listPolygons[k].geoJson);
+					if(isInside == true) {
+						if(polygons.length == 0) {
+							polygons.push(listPolygons[k]);
+						}
+					}
+			}
+			
+			//search polygons of the remaining points
+			for(var i = 1, j = route.coordinates.length; i < j; i++) {
+				var b = false;
+				points[i] = {
+					"type": "Feature",
+					"geometry": {
+						"type": "Point",
+						"coordinates": [route.coordinates[i][1], route.coordinates[i][0]]
+					}
+				};
+				for(var k = 0, l = listPolygons.length; k < l; k++){
+					var isInside = turf.inside(points[i], listPolygons[k].geoJson);
+					if(isInside == true) {
+						b = true;
+						if (listPolygons[k].id != polygons[polygons.length-1].id) {
+							polygons.push(listPolygons[k]);
+						}
+					}
+				}
+				
+				var lastPolygon = polygons[polygons.length-1];
+				if(b == false) {    // point i is not part of listPolygons
+					for(var k = 0, l = lastPolygon.neighbors.length; k < l; k++){
+						var isInside = turf.inside(points[i], lastPolygon.neighbors[k].geoJson);
+						if(isInside == true) {
+							if (lastPolygon.neighbors[k].id != lastPolygon.id) {
+								polygons.push(lastPolygon.neighbors[k]);
+							}
+		
+						}
+						
+					}
+				}
+			}
+			
+			removeDuplicates(polygons);
+			polygons = polygons.filter( function( el ){ return (typeof el !== "undefined"); } );
+			return polygons
+		}
+		
+		// find all polygons in the fastest route
+		function findPolygonsFastestRoute(route) {
+			var polygons = [];
+			// find polygon of the starting point
+			polygons[0] = insideFirst(route.coordinates[0][1], route.coordinates[0][0]);
+			polFastestRoute.push(polygons[0]);
+			for (var k = 0,j = polygons[0].neighbors.length; k < j; k++) {
+					// add all neighbors
+					neighborsRoute.push(polygons[0].neighbors[k]);
+				}
+			
+			// find polygons of all route points
+			for (var i = 1,l = route.coordinates.length; i < l; i++){
+				polygons[i] = inside(route.coordinates[i][1], route.coordinates[i][0], polygons[i-1]);
+				if (polygons[i].id != polygons[i-1].id) {
+					polFastestRoute.push(polygons[i]);
+					for (var k = 0, j = polygons[i].neighbors.length; k < j; k++){
+						neighborsRoute.push(polygons[i].neighbors[k]); 
+					}
+				}
+		
+			}	
+		}
+		
+		
+		// find centerNewRoutes
+		function findCenterBestPolygons() {
+			
+			// array of polygons to be excluded from the buffer
+			var polygonsSubtract = [];
+			// add the neighbors of the best polygon so we can't select a 2nd polygon too close to the best one
+			for(var i=0,j=listPolygons[0].neighbors.length; i < j; i++){
+				polygonsSubtract.push(listPolygons[0].neighbors[i]);
+			}
+			
+			/*
+			for(var i=0,j=startPolygon.neighbors.length; i < j; i++){ // add the neighbors of the start
+				polygonsSubtract.push(startPolygon.neighbors[i]);
+				startPolygonNeighbors.push(startPolygon.neighbors[i]);
+			}
+			*/
+			polygonsSubtract.push(startPolygon); // add the start and finish 
+			polygonsSubtract.push(finishPolygon);
+			
+			
+			
+			for(var i=0, j=listPolygons.length; i < j; i++){
+				centerBestPolygons[i] = turf.center(turf.featureCollection([listPolygons[i].geoJson]));
+				if(isInNeighbors(listPolygons[i], polygonsSubtract) == false){
+					for(k = 0, l = listPolygons[i].neighbors.length; k < l; k++){
+						polygonsSubtract.push(listPolygons[i].neighbors[k]);
+					}
+					centerNewRoutes.push(centerBestPolygons[i]);			
+				}
+			}
+		}
+		
+		
+		
+		// find distance between two given points
+		function calcDistance(lat1, lng1, lat2, lng2) {
+			var from = {
+				"type": "Feature",
+				"properties": {},
+				"geometry": {
+					"type": "Point",
+					"coordinates": [lng1, lat1]
+				}
+			};
+			var to = {
+				"type": "Feature",
+				"properties": {},
+				"geometry": {
+					"type": "Point",
+					"coordinates": [lng2, lat2]
+				}
+			};
+			
+			var units = "kilometers";
+			
+			return turf.distance(from, to, units);
+			
+		}
+		
+		// find neighbors of neighbors (they are going to be part of the buffer)
+		function findNsOfNs(polygons) {
+			for(var i = 0, j = polygons.length; i < j; i++) {
+				for(var k = 0, l = polygons[i].neighbors.length; k < l; k++)
+					nsOfNsRoute.push(polygons[i].neighbors[k]);
+			}
+			removeDuplicates(nsOfNsRoute);
+		}
+		
+		// select the best points of interest (either one or two) and use them as waypoints for the route
+		function selectWaypoints(route) {
+			var p = false;
+			var n = 0;
+			for(var i = 1, j = centerNewRoutes.length; i < j; i++) {
+				distFromBestWaypoint[i] = calcDistance(centerNewRoutes[0].geometry.coordinates[1], centerNewRoutes[0].geometry.coordinates[0], 
+								                    centerNewRoutes[i].geometry.coordinates[1], centerNewRoutes[i].geometry.coordinates[0]);
+				if(p != true) {
+					if ((distFromStart[0] > distFromStart[i]) && (distFromBestWaypoint[i] < maxDistBetweenWaypoints)) {
+						routes[0].setWaypoints([
+							L.latLng(route.waypoints[0].latLng.lat, route.waypoints[0].latLng.lng),
+							L.latLng(centerNewRoutes[i].geometry.coordinates[1], centerNewRoutes[i].geometry.coordinates[0]),
+							L.latLng(centerNewRoutes[0].geometry.coordinates[1], centerNewRoutes[0].geometry.coordinates[0]),
+							L.latLng(route.waypoints[1].latLng.lat, route.waypoints[1].latLng.lng)]);
+						routes[0].addTo(mymap);
+						p = true;
+						n = i;
+					}
+					else if ((distFromStart[0] < distFromStart[i]) && (distFromBestWaypoint[i] < maxDistBetweenWaypoints)){
+						routes[0].setWaypoints([
+							L.latLng(route.waypoints[0].latLng.lat, route.waypoints[0].latLng.lng),
+							L.latLng(centerNewRoutes[0].geometry.coordinates[1], centerNewRoutes[0].geometry.coordinates[0]),
+							L.latLng(centerNewRoutes[i].geometry.coordinates[1], centerNewRoutes[i].geometry.coordinates[0]),
+							L.latLng(route.waypoints[1].latLng.lat, route.waypoints[1].latLng.lng)]);
+						routes[0].addTo(mymap);
+						p = true;
+						n = i;
+					}
+				}
+				
+				
+			}
+			
+			if(n != 0) {
+			  secondWaypoint = true;
+			  secondWaypointCenter.push(centerNewRoutes[n]);
+			}
+			
+			if(p == false){
+				routes[0].setWaypoints([
+					L.latLng(route.waypoints[0].latLng.lat, route.waypoints[0].latLng.lng),
+					L.latLng(centerNewRoutes[0].geometry.coordinates[1], centerNewRoutes[0].geometry.coordinates[0]),
+					L.latLng(route.waypoints[1].latLng.lat, route.waypoints[1].latLng.lng)]);
+				routes[0].addTo(mymap);
+			}
+			
+		
+		}
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		/***********************
+		FLICKR
+		***********************/
+		
+		// set new flickr variable to access flickr API 
+		var flickr = new Flickr({
+			api_key: "flickr_key"
+		});
+
+		
+		// photos with id, tags/title, location and views
+		var dataPhotos = [];
+		
+		// iterate over calls to flickr to count the total number of photos
+		var n_flickr_wait = 0;
+		
+		// data to retrieve from LocalStorage if the loading part of a city was already executed
+		var data = [];
+		
+
+		
+		// loading section, executed only once
+		
+		/*
+		
+			// search all georeferenced photos in the selected area(bbox)
+			for(var t = 1; t < (selected_city.pages_photo+1); t++) {
+				flickr.photos.search({ // tot photos Milan centre = 426585 , 1707 flickr pages 
+					bbox: [southWest_lng, southWest_lat, northEast_lng, northEast_lat],
+					accuracy: 11,
+					privacy_filter: 1,
+					page: t,
+					per_page: 250, // max 250 per page
+					media: 'photos',
+					//sort:  'interestingness-desc', // sort photos with a flikr created rank
+					extras: ['tags', 'geo', 'views'], // return more attributes with the response
+					//min_upload_date: '14-08-2013' // select a temporal limit on the photos search
+					}, handleSearch); 
+			}
+		
+		*/
+		
+		
+		
+		
+		// LOCAL STORAGE
+		// retrieve data saved in LocalStorage
+		retrieveData();
+			
+		// re-create pol_values without calls to flickr servers
+		for(var i = 0, l = data.length; i < l; i++) {
+			for(var k = 0; k < numberOfParts[0]; k++) {
+				for(var h = 0; h < numberOfParts[1]; h++) {
+					if(i == pol_values[[k,h]].id)
+						pol_values[[k,h]].score = data[i];
+				}
+			}
+		}
+	
+		
+		
+		
+		// handle response from flickr
+		function handleSearch(err, result) {
+			if (err) throw new Error(err);
+			else {
+				// console.log(result);
+				// add photos and attributes to dataPhotos
+				for(var i = 0, j = result.photos.photo.length; i<j; i++) {
+					var id = parseInt(result.photos.photo[i].id);
+					var lat = parseFloat(result.photos.photo[i].latitude);
+					var lng = parseFloat(result.photos.photo[i].longitude);
+					var views = parseInt(result.photos.photo[i].views);
+					var text =  result.photos.photo[i].tags + " " + result.photos.photo[i].title;
+					
+					dataPhotos.push({
+							id: id,
+							coordinates: [lat, lng],
+							views: views,
+							text: text,
+						});
+					
+					n_flickr_wait++;
+				}
+					
+				console.log(n_flickr_wait);
+				// check if all photos have been returned (asynchronus call is over)
+				if(n_flickr_wait > selected_city.tot_photos-1) { // total photos-1
+					console.log(dataPhotos);
+						
+					for(var i = 0, j = dataPhotos.length; i < j; i++) {
+						// search to which polygon the photo belongs to
+						var polygon = insideFirst(dataPhotos[i].coordinates[1], dataPhotos[i].coordinates[0]);
+						for(var k = 0; k < numberOfParts[0]; k++) {
+							for(var h = 0; h < numberOfParts[1]; h++) {
+								if(polygon.id == pol_values[[k,h]].id) { 
+									pol_values[[k,h]].photos.push(dataPhotos[i]);
+									(pol_values[[k,h]].numOfPhotos)++;
+									pol_values[[k,h]].totViews = pol_values[[k,h]].totViews + dataPhotos[i].views;
+									var viewsScore = selectViews(dataPhotos[i]);
+									pol_values[[k,h]].viewsScore = pol_values[[k,h]].viewsScore + viewsScore;
+								}
+							}
+						}
+					}
+			
+					for(var k = 0; k < numberOfParts[0]; k++) {
+						for(var h = 0; h < numberOfParts[1]; h++) {
+							pol_values[[k,h]].score = pol_values[[k,h]].numOfPhotos + pol_values[[k,h]].viewsScore;
+						}
+					}
+						
+					console.log(pol_values);
+					dataPhotos.sort(function(a,b){return b[3] - a[3];});
+					console.log(dataPhotos);
+	
+	
+					// local storage creation
+					for(var k = 0; k < numberOfParts[0]; k++) {
+						for(var h = 0; h < numberOfParts[1]; h++) {
+							var id = (pol_values[[k,h]].id).toString();
+							var score = (Math.round(pol_values[[k,h]].score)).toString();
+							localStorage.setItem(id, score);
+						}
+					}
+					
+					// check if all photos have been added to the polygons
+					/* 
+					var num = 0;
+					for(var k = 0; k < numberOfParts[0]; k++) {
+						for(var h = 0; h < numberOfParts[1]; h++) {
+							num = num + pol_values[[k,h]].numOfPhotos;
+						}
+					}
+					console.log(num);
+					*/
+				}
+				
+			}	
+		}
+		
+		// perform sentiment analys on the photo tags
+		function selectViews(photo) {
+			var r1 = sentiment(photo.text ,'en');
+			var r2 = sentiment(photo.text ,'it');
+			if(r1.vote == "positive" || r2.vote == "positive")
+				return (photo.views)/30
+			else if(r1.vote == "negative" || r2.vote == "negative")
+			    return (-(photo.views))/30
+			else
+				return (photo.views)/50
+		
+		}
+		
+		// retrieve the score of the polygons saved on localstorage
+		function retrieveData() {
+			for (var i = 0; i < localStorage.length; i++){
+				var score = parseInt(localStorage.getItem(localStorage.key(i)));
+				var id = parseInt(localStorage.key(i));
+				data[id] = score;
+			}
+		}
+		
+		
+		// find localstorage space use (limit is 5 MB!)
+		function storageDim(){
+			var allStrings = '';
+			for(var key in window.localStorage){
+				if(window.localStorage.hasOwnProperty(key)){
+					allStrings += window.localStorage[key];
+				}
+			}
+			return allStrings ? 3 + ((allStrings.length*16)/(8*1024)) + ' KB' : 'Empty (0 KB)';
+		}
+		
+		
+		//var localStorageSpace = storageDim();
+		//console.log(localStorageSpace);
+		
+		// use (carefully) to clear the local storage
+		// localStorage.clear();
+		
+		// order pol_values by scores
+		var new_pol_values = [];
+		for(var x in pol_values) {
+			var temp = [pol_values[x].score, x, pol_values[x].id];
+			new_pol_values.push(temp);
+
+		}
+		new_pol_values.sort(function(a,b){return b[0] - a[0];});
+		
+		
+	
+		
+		
+
+
+	</script>
+</body>
+</html>
