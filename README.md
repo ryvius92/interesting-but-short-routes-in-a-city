@@ -10,7 +10,7 @@ The metadata of all geotagged Flickr photos inside a city have been used for the
 
 ## How to use
 
-Insert your mapzen free key inside the code where the routes are initialized.
+Insert your mapzen free key inside the codE (html file) where the routes are initialized.
 
 ```
 router: L.Routing.mapzen('mapzen_key', {costing:'pedestrian'})
@@ -54,6 +54,17 @@ The last part of the program is about the research of the most interesting areas
 <br />
 
 ## Examples
+
+Example of the route planner in a mobile app environment. <br />
+The red route is the shortest one, the blue one is the 'most interesting' route, with two interesting areas crossed.
+
+<br />
+
+![alt tag](https://github.com/ryvius92/short-and-interesting-routes-in-a-city/blob/master/percorso.jpg)
+
+<br />
+
+Routes Statistics :
 
 
 
