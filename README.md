@@ -60,7 +60,7 @@ The red route is the shortest one, the blue one is the 'most interesting' route,
 
 <br />
 
-![alt tag](https://github.com/ryvius92/short-and-interesting-routes-in-a-city/blob/master/percorso.jpg)
+![alt tag](https://github.com/ryvius92/short-and-interesting-routes-in-a-city/blob/master/percorso.jpg) ![alt tag](https://github.com/ryvius92/short-and-interesting-routes-in-a-city/blob/master/istruzioni_percorso.jpg)
 
 <br />
 
