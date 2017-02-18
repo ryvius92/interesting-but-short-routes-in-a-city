@@ -10,7 +10,7 @@ The metadata of all geotagged Flickr photos inside a city have been used for the
 
 ## How to use
 
-Insert your mapzen free key inside the codE (html file) where the routes are initialized.
+Insert your mapzen free key inside the code (html file) where the routes are initialized.
 
 ```
 router: L.Routing.mapzen('mapzen_key', {costing:'pedestrian'})
