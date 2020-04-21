@@ -14,7 +14,7 @@ The application is written in Javascript and it's client side only.
 The are three main parts: <br />
 
 City map and areas <br />
-Leaflet and OSM are used to dispay the city map (you are given a choice between Milan and Florence... but more cities map could be added). The map is equally partioned in areas of about 400x250 meters, where each of them represent a possible location to visit. <br /> <br />
+Leaflet and OSM are used to dispay the city map (you are given a choice between Milan and Florence... but more cities could be added). The map is equally partioned in areas of about 400x250 meters, where each of them represent a possible location to visit. <br /> <br />
 
 Define how a city area is "interesting" <br />
 A score is given to each area, and it's calcuated with the stats and metadata of geotagged public Flickr photos such as : total number of photos and views. Part of the score is calculated also by performing a text sentiment analysis on the photos tags (using a score dictionary).
