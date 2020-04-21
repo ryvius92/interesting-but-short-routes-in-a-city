@@ -33,19 +33,23 @@ var flickr = new Flickr({
 
 The are three main parts. <br />
 
-- Use of a map and definition of city area. <br />
+Use of a map and definition of city area. <br />
 Leaflet and OSM are used to dispay the city map (you are given a choice between Milan and Florence... but more cities can be easily added). The map is partioned in small and equal cells of about 400x250 meters, where each of them represent a possible location to visit. <br />
 
-- Define how an area is "interesting" <br />
+Define how an area is "interesting" <br />
 Flickr photos metadata are used to calculate a score for each area combining statisics such as : total number of photos, views and a text sentiment analysis on the photos tags (using a score dictionary).
 
-- Computation of the best route  <br />
+Computation of the best route  <br />
 How is the route chosen ? the aim is to choose a route where shortness and "interestingness" are balanced. The algorithm is as follows : 
+
+
+<br />
+
 
 * Computation of the fastest route (with Mapzen)
 * Creation of a list of all areas near the fastest route (the limit is a 1km circle from each point of the route) <br /> 
 * The list is then ordered by score <br /> 
-* List of areas is then filtered more. Areas that are too far or have a not enough high score are removed (see the code for more details):
+* List of areas is then filtered even more. Areas that are too far or have a score not high enough are removed.
 * Selection of 1 or 2 waypoints <br /> The center of the best remaining area is selected as an intermediate point for the new route. A possible second waypoint is searched between the other areas, and it is chosen only if its distance with the first waypoint is considered acceptable. <br /> 
 
 <br />
